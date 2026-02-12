@@ -398,7 +398,7 @@ def run_bot():
             # PHASE 2: SCAN
             if len(manager.state["trades"]) < MAX_POSITIONS:
 
-                print(f"🔍 Scanning... (Bal: ${current_bal:.2f})")
+                print(f"🔍 Scanning... (Balance: ${current_bal:.2f})")
 
                 if current_bal > 2.0:
                     dynamic_list = get_dynamic_symbols(limit=10)
