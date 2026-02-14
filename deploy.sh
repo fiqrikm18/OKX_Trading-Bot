@@ -20,29 +20,28 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 
 # 4. Set up Python Environment with uv
 echo "🐍 Setting up venv with uv..."
-# remove old venv if exists to avoid conflicts
-rm -rf .venv
-uv venv
+# Install dependencies from uv.lock (super fast & determinstic)
+uv sync
 
-# Activate venv
-source .venv/bin/activate
-
-# Install libraries using uv (Parallel & Cached - Super Fast)
-echo "📚 Installing Python Libraries..."
-uv pip install ccxt pandas pandas_ta scikit-learn numpy requests python-dotenv
+# Activate venv is not strictly needed if we point to the python binary, 
+# but uv sync creates .venv by default.
 
 # 5. Install PM2 using Bun
 echo "⚙️ Installing PM2 via Bun..."
 bun add -g pm2
 
-# 6. Start the Bot
-echo "🤖 Starting AI Trader..."
+# 6. Start the Bot & Dashboard
+echo "🤖 Starting AI Trader & Dashboard..."
 
 # Stop existing if running
 pm2 delete ai-trader 2>/dev/null
+pm2 delete ai-dashboard 2>/dev/null
 
-# Start using the Python executable inside the .venv folder
+# Start Bot
 pm2 start main.py --name "ai-trader" --interpreter ./.venv/bin/python3
+
+# Start Dashboard (Streamlit needs specific command structure with PM2)
+pm2 start "uv run streamlit run dashboard.py --server.port 8501 --server.headingsWithAnchors false" --name "ai-dashboard"
 
 # 7. Save State
 echo "💾 Saving PM2 State..."
@@ -51,9 +50,8 @@ pm2 save
 echo "-----------------------------------------------"
 echo "✅ DEPLOYMENT COMPLETE!"
 echo "-----------------------------------------------"
-echo "👉 Check logs:   pm2 logs ai-trader"
-echo "👉 Stop bot:     pm2 stop ai-trader"
-echo "👉 Monitor:      pm2 monit"
+echo "👉 Check logs:   pm2 logs"
+echo "👉 Dashboard:    http://<your-ip>:8501"
 echo "-----------------------------------------------"
 
 # Startup command (PM2 might ask you to run a command after this)
