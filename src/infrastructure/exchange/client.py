@@ -48,5 +48,21 @@ class ExchangeClient:
         if REAL_TRADING:
             return self.client.create_market_sell_order(symbol, amount)
 
+    def create_limit_buy_order(self, symbol, amount, price):
+        if REAL_TRADING:
+            return self.client.create_limit_buy_order(symbol, amount, price)
+
+    def create_limit_sell_order(self, symbol, amount, price):
+        if REAL_TRADING:
+            return self.client.create_limit_sell_order(symbol, amount, price)
+
+    def cancel_order(self, order_id, symbol):
+        if REAL_TRADING:
+            return self.client.cancel_order(order_id, symbol)
+
+    def fetch_order(self, order_id, symbol):
+        if REAL_TRADING:
+            return self.client.fetch_order(order_id, symbol)
+
 
 exchange_client = ExchangeClient()

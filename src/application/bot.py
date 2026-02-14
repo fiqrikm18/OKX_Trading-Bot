@@ -7,9 +7,15 @@ from src.domain.analysis.market import fetch_data, get_dynamic_symbols, get_mark
 from src.domain.analysis.ai_scanner import get_ai_signal
 
 
+from src.infrastructure.notification.telegram_bot import TelegramService
+
+
 class TradingBot:
     def __init__(self):
         self.manager = TradeManager(exchange_client)
+        self.stop_requested = False
+        self.telegram = TelegramService(self)
+        self.telegram.start()
 
     def get_current_balance(self):
         if REAL_TRADING:
@@ -47,14 +53,37 @@ class TradingBot:
         if REAL_TRADING:
             self.set_leverage(symbol)
             try:
+                # Attempt Limit Order (Maker)
+                limit_price = ticker["bid"] if side == "LONG" else ticker["ask"]
+                print(f"⏳ Placing Limit {side} Order at {limit_price}...")
+
+                order = None
                 if side == "LONG":
-                    exchange_client.create_market_buy_order(
-                        symbol, amount_coins)
+                    order = exchange_client.create_limit_buy_order(
+                        symbol, amount_coins, limit_price)
                 elif side == "SHORT":
-                    exchange_client.create_market_sell_order(
-                        symbol, amount_coins)
+                    order = exchange_client.create_limit_sell_order(
+                        symbol, amount_coins, limit_price)
+
+                # Wait for fill (Simple blocking for MVP)
+                time.sleep(10)
+
+                # Check Order Status
+                fetched = exchange_client.fetch_order(order["id"], symbol)
+                if fetched["status"] == "open":
+                    print("⏳ Limit Order not filled. Cancelling and Market Buying...")
+                    exchange_client.cancel_order(order["id"], symbol)
+                    # Fallback to Market
+                    if side == "LONG":
+                        exchange_client.create_market_buy_order(
+                            symbol, amount_coins)
+                    elif side == "SHORT":
+                        exchange_client.create_market_sell_order(
+                            symbol, amount_coins)
+                else:
+                    print("✅ Limit Order Filled!")
             except Exception as e:
-                log_to_discord(f"❌ Failed: {e}", "error")
+                log_to_discord(f"❌ Execution Failed: {e}", "error")
                 return
 
         self.manager.add_trade(
@@ -129,6 +158,11 @@ class TradingBot:
         log_to_discord(f"🤖 **Bot Live**")
 
         while True:
+            if self.stop_requested:
+                print("🛑 Stop Requested. Exiting...")
+                log_to_discord("🛑 Bot Stopped via Telegram")
+                break
+
             try:
                 # PHASE 1: MANAGE
                 active_symbols = list(self.manager.state["trades"].keys())
@@ -143,12 +177,63 @@ class TradingBot:
                     trade = self.manager.state["trades"][symbol]
                     ticker = exchange_client.fetch_ticker(symbol)
                     current_price = ticker["last"]
+                    entry_price = trade["entry"]
+                    side = trade["side"]
+                    amount = trade["amount"]
+                    dca_count = trade.get("dca_count", 0)
+
+                    # DCA Logic (Max 2 DCAs, 2% Step)
+                    DCA_STEP = 0.02  # TEMP FOR VERIFICATION
+                    MAX_DCA = 2
+
+                    pnl_pct = 0.0
+                    if side == "LONG":
+                        pnl_pct = (current_price - entry_price) / entry_price
+                    elif side == "SHORT":
+                        pnl_pct = (entry_price - current_price) / entry_price
+
+                    if pnl_pct <= -DCA_STEP and dca_count < MAX_DCA:
+                        print(
+                            f"📉 DCA Triggered for {symbol} (PnL: {pnl_pct*100:.2f}%)")
+
+                        # Execute DCA Order
+                        try:
+                            # Buy same amount (Martingale would be amount * 2)
+                            dca_amount = amount
+                            # Execute Order
+                            if REAL_TRADING:
+                                if side == "LONG":
+                                    exchange_client.create_market_buy_order(
+                                        symbol, dca_amount)
+                                elif side == "SHORT":
+                                    exchange_client.create_market_sell_order(
+                                        symbol, dca_amount)
+                            else:
+                                pass  # Paper fill at current_price
+
+                             # Update State
+                            new_total_amt = amount + dca_amount
+                            new_margin = trade["margin"] * 2  # Approx
+                            # Weighted Avg Entry
+                            total_cost = (entry_price * amount) + \
+                                (current_price * dca_amount)
+                            new_entry = total_cost / new_total_amt
+
+                            self.manager.update_trade_entry(
+                                symbol, new_entry, new_total_amt, new_margin)
+                            log_to_discord(
+                                f"♻️ **DCA Executed** for {symbol}\nNew Entry: ${new_entry:.4f}\nCount: {dca_count + 1}/{MAX_DCA}")
+                            continue  # Skip exit check this tick
+                        except Exception as e:
+                            log_to_discord(f"❌ DCA Failed: {e}", "error")
+
                     self.manager.update_trailing(symbol, current_price)
                     exit_reason, exit_price = self.manager.check_exit_conditions(
                         symbol, current_price
                     )
 
                     if trade["side"] == "LONG":
+                        # Use new entry/amount
                         pnl = (current_price -
                                trade["entry"]) * trade["amount"]
                     else:

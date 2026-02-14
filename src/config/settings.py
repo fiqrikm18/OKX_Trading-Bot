@@ -36,3 +36,14 @@ REAL_TRADING = False  # CHANGE TO True FOR REAL MONEY
 INITIAL_PAPER_BALANCE = 5.0
 
 STATE_FILE = "trade_state.json"
+
+# --- DATABASE ---
+DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASS = os.getenv("DB_PASS", "postgres")
+DB_NAME = os.getenv("DB_NAME", "okx_trading")
+DB_PORT = os.getenv("DB_PORT", "5432")
+
+# --- TELEGRAM ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")

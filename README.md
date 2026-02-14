@@ -41,7 +41,7 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
-### Option 2: Manual Installation
+### Option 2: Manual Development
 
 1. **Clone the repository:**
 
@@ -50,18 +50,14 @@ chmod +x deploy.sh
     cd OKXTradingBot
     ```
 
-2. **Set up a virtual environment (using `uv` or `venv`):**
+2. **Install Dependencies (using `uv`):**
 
     ```bash
-    # Using uv (Recommended)
-    uv venv
-    source .venv/bin/activate
-    uv pip install -r pyproject.toml
+    # Install uv if not installed
+    curl -LsSf https://astral.sh/uv/install.sh | sh
     
-    # OR using standard pip
-    python3 -m venv .venv
-    source .venv/bin/activate
-    pip install ccxt pandas pandas_ta scikit-learn numpy requests python-dotenv
+    # Sync dependencies
+    uv sync
     ```
 
 ---
@@ -82,42 +78,59 @@ chmod +x deploy.sh
     OKX_SECRET_KEY=your_secret_key
     OKX_PASSWORD=your_passphrase
     DISCORD_WEBHOOK_URL=your_discord_webhook_url
+    
+    # Database (Postgres)
+    DB_HOST=127.0.0.1
+    DB_USER=postgres
+    DB_PASS=postgres
+    DB_NAME=okx_trading
+    
+    # Telegram
+    TELEGRAM_TOKEN=your_token
+    TELEGRAM_CHAT_ID=your_chat_id
     ```
 
 2. **Bot Settings (`main.py`)**:
-    You can adjust trading parameters directly in the `0. CONFIGURATION` section of `main.py`:
-
-    * `TIMEFRAME`: Candle timeframe (default: `"15m"`).
-    * `LEVERAGE`: Trading leverage (default: `10`).
-    * `RISK_PER_TRADE_PCT`: Risk per trade as a decimal (default: `0.10` for 10%).
-    * `REAL_TRADING`: Set to `True` to trade with real money. **Default is `False` (Paper Trading).**
+    You can adjust trading parameters directly in the `0. CONFIGURATION` section of `main.py`.
 
 ---
 
 ## 🏃 Usage
 
-### Run Locally
+### Run Locally (Concurrent)
 
-To start the bot in your terminal:
+To start both the **Trading Bot** and the **Dashboard** in local development mode:
 
 ```bash
-python main.py
+chmod +x run_all.sh
+./run_all.sh
 ```
 
-### Run in Background (PM2)
+* **Dashboard**: `http://localhost:8501`
+* **Bot**: Runs in background (check terminal output)
 
-If you used `deploy.sh`, the bot is already running under PM2.
+> **Note**: Do not run `python dashboard.py`. The dashboard must be run via `streamlit run dashboard.py` or the provided script.
 
-* **View Logs**: `pm2 logs ai-trader`
+### Run in Background (PM2 Production)
+
+If you used `deploy.sh`, both services are already running under PM2.
+
+* **View Logs**: `pm2 logs`
 * **Monitor Status**: `pm2 monit`
-* **Stop Bot**: `pm2 stop ai-trader`
-* **Restart Bot**: `pm2 restart ai-trader`
+* **Stop All**: `pm2 stop all`
+* **Restart All**: `pm2 restart all`
+* **Dashboard URL**: `http://<your-server-ip>:8501`
 
 ---
 
 ## 📂 Project Structure
 
-* `main.py`: Core logic for the trading bot (AI, execution, risk management).
+* `main.py`: Entry point for the trading bot.
+* `src/`: Source code directory (DDD Structure).
+  * `config/`: Configuration settings.
+  * `domain/`: Business logic (AI, Market Analysis).
+  * `infrastructure/`: External adapters (Exchange, Discord, Persistence).
+  * `application/`: Application services and trade orchestration.
 * `deploy.sh`: Automated deployment script.
 * `trade_state.json`: Stores active trades and PnL history (auto-generated).
 * `pyproject.toml`: Python dependencies and project metadata.
@@ -129,20 +142,29 @@ If you used `deploy.sh`, the bot is already running under PM2.
 
 **Trading cryptocurrencies involves significant risk and can result in the loss of your capital.**
 
-# Roadmap
+1. **Create Dashboard Admin User**:
+    To access the dashboard, you need to create an admin account:
+
+    ```bash
+    uv run python create_user.py
+    ```
+
+    Follow the prompts to set your username and password.
+
+## Roadmap
 
 ## 📅 Feature Checklist
 
-* [ ] **1.A Market Regime Filter** (Trend Alignment)
-* [ ] **1.B Smart Volatility Stops** (ATR-based dynamic stops)
-* [ ] **1.C Sentiment Analysis** (Funding Rates)
-* [ ] **2.A Daily Circuit Breaker** (Max daily loss limit)
-* [ ] **2.B Breakeven Trigger** (Secure profits early)
-* [ ] **3.A Telegram Bot Control** (Remote management)
-* [ ] **3.B Web Dashboard** (Streamlit visualization)
-* [ ] **3.C Database Integration** (SQLite migration)
-* [ ] **4.A Limit Orders** (Maker fee savings)
-* [ ] **4.B DCA Strategy** (Average down logic)
+* [x] **1.A Market Regime Filter** (Trend Alignment)
+* [x] **1.B Smart Volatility Stops** (ATR-based dynamic stops)
+* [x] **1.C Sentiment Analysis** (Funding Rates)
+* [x] **2.A Daily Circuit Breaker** (Max daily loss limit)
+* [x] **2.B Breakeven Trigger** (Secure profits early)
+* [x] **3.A Telegram Bot Control** (Remote management)
+* [x] **3.B Web Dashboard** (Streamlit visualization)
+* [x] **3.C Database Integration** (PostgreSQL migration)
+* [x] **4.A Limit Orders** (Maker fee savings)
+* [x] **4.B DCA Strategy** (Average down logic)
 
 ## 1. 🧠 AI & Strategy Enhancements (The Brain)
 
