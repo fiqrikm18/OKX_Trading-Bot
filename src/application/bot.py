@@ -198,7 +198,9 @@ class TradingBot:
                 # PHASE 1: MANAGE
                 active_symbols = list(self.manager.state["trades"].keys())
                 total_realized_pnl = self.manager.state["total_pnl"]
-                current_bal = self.get_current_balance()
+
+                # Sync Balance & Log Equity (Always run this)
+                current_bal, current_equity = self.manager.sync_balance()
 
                 print(
                     f"\n--- 💳 Balance: ${current_bal:.2f} | 💰 Profit: ${total_realized_pnl:.4f} ---"
