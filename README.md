@@ -23,6 +23,7 @@ Designed for both **Paper Trading** (simulation) and **Live Trading** (real capi
 ## 🛠️ Prerequisites
 
 * **Python 3.12+**
+* **Python 3.12+**
 * **OKX Account**: API Key, Secret, and Passphrase (with **Trade** permissions enabled).
 * **Discord Webhook** (Optional): For receiving trade alerts.
 
@@ -30,11 +31,11 @@ Designed for both **Paper Trading** (simulation) and **Live Trading** (real capi
 
 ## 📦 Installation
 
-This project is optimized for deployment on Linux/macOS using `uv` for ultra-fast dependency management.
+This project is optimized for deployment on Linux/macOS using `uv` for ultra-fast dependency management and `Vite` for the frontend.
 
 ### Option 1: Quick Deployment (Recommended)
 
-Use the included deployment script to set up everything automatically (installs `uv`, `bun`, `pm2`, and dependencies).
+Use the included deployment script to set up everything automatically (installs `uv`, `bun`, `pm2`, Backend dependencies, and builds Foreground).
 
 ```bash
 chmod +x deploy.sh
@@ -50,14 +51,22 @@ chmod +x deploy.sh
     cd OKXTradingBot
     ```
 
-2. **Install Dependencies (using `uv`):**
+2. **Backend Setup (using `uv`):**
 
     ```bash
     # Install uv if not installed
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    
-    # Sync dependencies
+
+    # Sync python dependencies
     uv sync
+    ```
+
+3. **Frontend Setup (React + Vite):**
+
+    ```bash
+    cd frontend
+    npm install
+    cd ..
     ```
 
 ---
@@ -78,183 +87,81 @@ chmod +x deploy.sh
     OKX_SECRET_KEY=your_secret_key
     OKX_PASSWORD=your_passphrase
     DISCORD_WEBHOOK_URL=your_discord_webhook_url
-    
+
     # Database (Postgres)
     DB_HOST=127.0.0.1
     DB_USER=postgres
     DB_PASS=postgres
     DB_NAME=okx_trading
-    
-    # Telegram
-    TELEGRAM_TOKEN=your_token
-    TELEGRAM_CHAT_ID=your_chat_id
-    ```
 
-2. **Bot Settings (`main.py`)**:
-    You can adjust trading parameters directly in the `0. CONFIGURATION` section of `main.py`.
+    # API Security
+    JWT_SECRET_KEY=your_secure_secret
+    ACCESS_TOKEN_EXPIRE_MINUTES=1440
+    ```
 
 ---
 
 ## 🏃 Usage
 
-### Run Locally (Concurrent)
+### Run Locally (Dev Mode)
 
-To start both the **Trading Bot** and the **Dashboard** in local development mode:
+To start both the **FastAPI Backend** and **React Frontend** in local development mode:
 
 ```bash
 chmod +x run_all.sh
 ./run_all.sh
 ```
 
-* **Dashboard**: `http://localhost:8501`
-* **Bot**: Runs in background (check terminal output)
-
-> **Note**: Do not run `python dashboard.py`. The dashboard must be run via `streamlit run dashboard.py` or the provided script.
+* **Dashboard**: `http://localhost:5173`
+* **API Specs**: `http://localhost:8000/docs`
 
 ### Run in Background (PM2 Production)
 
-If you used `deploy.sh`, both services are already running under PM2.
+If you used `deploy.sh`, services are managed by PM2.
 
 * **View Logs**: `pm2 logs`
 * **Monitor Status**: `pm2 monit`
 * **Stop All**: `pm2 stop all`
 * **Restart All**: `pm2 restart all`
-* **Dashboard URL**: `http://<your-server-ip>:8501`
+* **Dashboard URL**: `http://<your-server-ip>:5173`
 
 ---
 
 ## 📂 Project Structure
 
-* `main.py`: Entry point for the trading bot.
-* `src/`: Source code directory (DDD Structure).
-  * `config/`: Configuration settings.
+* `src/`: Backend Source code (DDD Structure).
+  * `config/`: Settings & Environment.
   * `domain/`: Business logic (AI, Market Analysis).
-  * `infrastructure/`: External adapters (Exchange, Discord, Persistence).
-  * `application/`: Application services and trade orchestration.
-* `deploy.sh`: Automated deployment script.
-* `trade_state.json`: Stores active trades and PnL history (auto-generated).
-* `pyproject.toml`: Python dependencies and project metadata.
-* `.env`: Configuration file for API keys (not committed).
+  * `infrastructure/`: External adapters (Exchange, Discord, Postgres).
+  * `application/`: Application services.
+  * `interfaces/api/`: FastAPI Routes & Auth.
+* `frontend/`: React + Vite Frontend.
+  * `src/pages/`: Dashboard & Login screens.
+  * `src/components/`: Reusable UI components.
+* `deploy.sh`: Automated production deployment.
+* `run_all.sh`: Local development launcher.
+* `pyproject.toml`: Python dependencies.
 
 ---
 
 ## ⚠️ Disclaimer
 
-**Trading cryptocurrencies involves significant risk and can result in the loss of your capital.**
+**Trading cryptocurrencies involves significant risk.**
 
-1. **Create Dashboard Admin User**:
-    To access the dashboard, you need to create an admin account:
+1. **Create Admin User**:
+    To access the dashboard, create an initial admin account:
 
     ```bash
     uv run python create_user.py
     ```
 
-    Follow the prompts to set your username and password.
+## 🗺️ Roadmap Status
 
-## Roadmap
-
-## 📅 Feature Checklist
-
-* [x] **1.A Market Regime Filter** (Trend Alignment)
-* [x] **1.B Smart Volatility Stops** (ATR-based dynamic stops)
-* [x] **1.C Sentiment Analysis** (Funding Rates)
-* [x] **2.A Daily Circuit Breaker** (Max daily loss limit)
-* [x] **2.B Breakeven Trigger** (Secure profits early)
-* [x] **3.A Telegram Bot Control** (Remote management)
-* [x] **3.B Web Dashboard** (Streamlit visualization)
-* [x] **3.C Database Integration** (PostgreSQL migration)
-* [x] **4.A Limit Orders** (Maker fee savings)
-* [x] **4.B DCA Strategy** (Average down logic)
-
-## 1. 🧠 AI & Strategy Enhancements (The Brain)
-
-### A. Market Regime Filter ("Don't Swim Against the Tide")
-
-**The Problem:** Your bot might try to LONG an altcoin while Bitcoin is crashing 10%. This usually fails.
-**The Feature:** Before opening any trade, check Bitcoin's trend.
-
-* If BTC price < BTC 200 EMA -> Bear Market (Only allow SHORTs).
-* If BTC price > BTC 200 EMA -> Bull Market (Only allow LONGs).
-**Why:** Increases win rate significantly by aligning with the global market direction.
-
-### B. Smart Volatility Stops (ATR)
-
-**The Problem:** Your current TRAILING_STOP_PCT = 0.02 (2%) is static.
-
-* For a stable coin (like BTC), 2% is too wide.
-* For a meme coin (like PEPE), 2% is too tight and you will get "stopped out" by normal noise.
-**The Feature:** Use ATR (Average True Range) to calculate stops.
-* Stop Loss = Current Price - (ATR * 2)
-**Why:** It adapts to the coin's volatility dynamically.
-
-### C. Sentiment Analysis (Funding Rates)
-
-**The Problem:** Technical indicators (RSI/SMA) lag behind price.
-**The Feature:** Use Funding Rates as a sentiment feature for your AI.
-
-* High Positive Funding = Market is greedy (Potential Short signal).
-* High Negative Funding = Market is fearful (Potential Long signal).
-**How:** `exchange.fetch_funding_rate(symbol)` and add it to your DataFrame.
-
-## 2. 🛡️ Risk Management (The Shield)
-
-### A. Daily Circuit Breaker
-
-**The Problem:** Sometimes the market goes crazy (flash crash) and the AI starts making bad decisions repeatedly.
-**The Feature:** A "Max Daily Loss" limit.
-
-* Example: If Daily Loss > 10%, Stop Trading for 24 hours.
-**Why:** Prevents one bad day from wiping out your account.
-
-### B. Breakeven Trigger
-
-**The Problem:** You are up 4% (Target is 5%), but then price drops and hits your Stop Loss (-2%). You turned a win into a loss.
-**The Feature:** Move Stop Loss to Entry Price once profit hits X% (e.g., 2.5%).
-**Why:** Ensures a "Risk-Free Trade" once the price moves in your favor.
-
-## 3. 🎮 Usability & Control (The Body)
-
-### A. Telegram Bot Control (Interactive)
-
-**The Problem:** Currently, you can only watch Discord logs. You can't control the bot without SSH-ing into the server.
-**The Feature:** Use a Telegram Bot API to send commands to your bot via chat.
-
-* `/status` -> Bot replies with current PnL and open positions.
-* `/sell BTC` -> Forces the bot to close the BTC position immediately.
-* `/stop` -> Pauses the bot.
-**Why:** Gives you control from your phone anywhere in the world.
-
-### B. Web Dashboard (Streamlit)
-
-**The Feature:** Build a simple dashboard using Python Streamlit that reads your `trade_state.json`.
-**Why:** Visualize your profit curve, win rate, and trade history in a nice graph instead of text logs.
-
-### C. Database Integration (SQLite)
-
-**The Problem:** `trade_state.json` is risky. If the file gets corrupted, you lose data. It also doesn't store history (closed trades).
-**The Feature:** Move from JSON to SQLite (a single-file database).
-
-* **Table 1:** `active_trades` (Current positions).
-* **Table 2:** `trade_history` (Past performance for analysis).
-
-## 4. ⚡ Execution (The Hands)
-
-### A. Limit Orders (Maker Fees)
-
-**The Problem:** You currently use "Market Orders" (Taker). These have higher fees (usually 0.05%).
-**The Feature:** Place "Limit Orders" (Maker) slightly below price and wait for a fill.
-**Why:** Maker fees are often much lower (sometimes 0.02% or even 0%), saving you money on every trade.
-
-### B. DCA (Dollar Cost Averaging) / Grid
-
-**The Feature:** Instead of closing at a loss, buy more if the price drops -2%, -4%, -6% to lower your average entry price.
-**Warning:** This is risky (Martingale strategy), but very popular for "recovering" losing trades in ranging markets.
-
----
-
-🌟 **Priority Features (Implemented First):**
-Since we are running on a small account ($5) where one bad trade hurts, we are prioritizing implementing:
-
-1. **2.B (Breakeven Trigger)**
-2. **1.B (ATR Stops)**
-to protect capital.
+* [x] **Core Trading Engine** (AI Signals, Risk Mgmt)
+* [x] **Database** (PostgreSQL Persistence)
+* [x] **API Layer** (FastAPI, JWT Auth)
+* [x] **Frontend** (React, Tailwind, Recharts)
+  * [x] Real-time PnL Updates
+  * [x] Trade History & Filtering
+  * [x] Responsive Mobile Layout
+  * [x] Manual Bot Control (Start/Stop)

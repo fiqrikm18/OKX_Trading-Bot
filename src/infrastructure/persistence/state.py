@@ -1,5 +1,5 @@
 from datetime import datetime
-from src.config.settings import TRAILING_STOP_PCT, TAKE_PROFIT_PCT, ATR_MULTIPLIER, INITIAL_PAPER_BALANCE, REAL_TRADING, BREAKEVEN_TRIGGER_PCT, MAX_DAILY_LOSS_PCT, LEVERAGE
+from src.config.settings import TRAILING_STOP_PCT, TAKE_PROFIT_PCT, ATR_MULTIPLIER, INITIAL_PAPER_BALANCE, REAL_TRADING, BREAKEVEN_TRIGGER_PCT, MAX_DAILY_LOSS_PCT, LEVERAGE, TRAILING_ROI_ACTIVATION
 from src.infrastructure.exchange.client import exchange_client
 from src.infrastructure.persistence.postgres_repo import PostgresRepository
 
@@ -58,12 +58,12 @@ class TradeManager:
         self.repo.save_trade(trade)
         self.save_state()
 
-    def remove_trade(self, symbol, pnl):
+    def remove_trade(self, symbol, pnl, exit_reason="Unknown"):
         if symbol in self.state["trades"]:
             del self.state["trades"][symbol]
             self.state["total_pnl"] += pnl
             self.state["paper_balance"] += pnl
-            self.repo.close_trade(symbol)
+            self.repo.close_trade(symbol, pnl, exit_reason)
             self.save_state()
 
     def update_trailing(self, symbol, current_price):
@@ -73,16 +73,36 @@ class TradeManager:
         if "best_price" not in trade:
             trade["best_price"] = trade["entry"]
 
+        entry = trade["entry"]
         side = trade["side"]
         best = trade["best_price"]
+        amount = trade["amount"]
+        margin = trade.get("margin", (amount * entry) / LEVERAGE)
+
+        # Calculate ROI to check activation
+        if side == "LONG":
+            pnl = (current_price - entry) * amount
+            roi_pct = (pnl / margin) if margin > 0 else 0
+        else:
+            pnl = (entry - current_price) * amount
+            roi_pct = (pnl / margin) if margin > 0 else 0
+
+        # Only update "best_price" (Trailing High Water Mark) is ROI > Activation
+        # This keeps the Stop Loss loose/breakeven until we hit big profit
+
         updated = False
 
-        if side == "LONG" and current_price > best:
-            trade["best_price"] = current_price
-            updated = True
-        elif side == "SHORT" and current_price < best:
-            trade["best_price"] = current_price
-            updated = True
+        if roi_pct >= TRAILING_ROI_ACTIVATION:
+            if side == "LONG" and current_price > best:
+                trade["best_price"] = current_price
+                updated = True
+                print(
+                    f"📈 Trailing Stop Updated (Long): New High ${current_price:.4f} (ROI: {roi_pct*100:.1f}%)")
+            elif side == "SHORT" and current_price < best:
+                trade["best_price"] = current_price
+                updated = True
+                print(
+                    f"📉 Trailing Stop Updated (Short): New Low ${current_price:.4f} (ROI: {roi_pct*100:.1f}%)")
 
         if updated:
             self.state["trades"][symbol] = trade
@@ -165,13 +185,22 @@ class TradeManager:
             self.state["last_reset_date"] = current_date
             self.save_state()
 
-    def check_circuit_breaker(self):
-        start_bal = self.state.get("daily_start_balance", 1.0)
+    def sync_balance(self):
+        """
+        Fetches real balance if in production, updates state, and logs equity history.
+        """
         if REAL_TRADING and self.exchange_client:
-            current_bal = self.exchange_client.fetch_balance()
+            try:
+                current_bal = self.exchange_client.fetch_balance()
+                self.state["paper_balance"] = current_bal
+                self.repo.save_state_value("paper_balance", current_bal)
+            except Exception as e:
+                print(f"⚠️ Failed to sync balance: {e}")
+                current_bal = self.state["paper_balance"]
         else:
             current_bal = self.state["paper_balance"]
 
+        # Calculate Equity
         unrealized_pnl = 0.0
         if self.exchange_client:
             for symbol, trade in self.state["trades"].items():
@@ -189,10 +218,36 @@ class TradeManager:
                     pass
 
         current_equity = current_bal + unrealized_pnl
-        pnl_pct = (current_equity - start_bal) / start_bal
 
-        # Log Equity History
+        # Log to DB
         self.repo.log_equity(current_bal, current_equity,
                              self.state["total_pnl"])
+
+        return current_bal, current_equity
+
+    def check_circuit_breaker(self):
+        # We assume sync_balance is called before this in the loop
+        current_bal = self.state["paper_balance"]
+        start_bal = self.state["daily_start_balance"]
+
+        # Calculate approximate equity again or pass it in?
+        # For simplicity, let's just use current_bal vs start_bal
+        # But circuit breaker usually cares about EQUITY drawdown (including open positions)
+
+        # valid approach: re-calculate or reuse
+        # To avoid double fetching, let's rely on sync_balance having triggered recently
+        # OR just re-calculate equity from state since prices are volatile
+
+        unrealized_pnl = 0.0
+        # ... (same pnl calc or optimized) ...
+        # For safety/speed let's just use the PnL from the active trades we might have just updated in the bot loop?
+        # The bot loop updates trade["unrealized_pnl"]!
+
+        for trade in self.state["trades"].values():
+            unrealized_pnl += trade.get("unrealized_pnl", 0.0)
+
+        current_equity = current_bal + unrealized_pnl
+        pnl_pct = (current_equity - start_bal) / \
+            start_bal if start_bal > 0 else 0
 
         return pnl_pct < -MAX_DAILY_LOSS_PCT, pnl_pct

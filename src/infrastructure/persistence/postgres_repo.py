@@ -10,7 +10,8 @@ Base = declarative_base()
 
 class Trade(Base):
     __tablename__ = 'trades'
-    symbol = Column(String, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String)
     side = Column(String)
     entry = Column(Float)
     amount = Column(Float)
@@ -20,6 +21,10 @@ class Trade(Base):
     breakeven_active = Column(Boolean)
     dca_count = Column(Integer, default=0)
     status = Column(String, default="OPEN")
+    created_at = Column(String, default=datetime.utcnow().isoformat)
+    closed_at = Column(String, nullable=True)
+    pnl = Column(Float, nullable=True)
+    exit_reason = Column(String, nullable=True)
 
 
 class BotState(Base):
@@ -47,18 +52,43 @@ class PostgresRepository:
     def __init__(self):
         self.engine = create_engine(
             f'postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}')
-        Base.metadata.create_all(self.engine)
 
-        # Schema Migration for dca_count
+        # Schema Migration
         try:
-            from sqlalchemy import text
+            from sqlalchemy import text, inspect
             with self.engine.connect() as conn:
+                # Check if 'id' column exists in trades
+                result = conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name='trades' AND column_name='id'"))
+                if not result.fetchone():
+                    print(
+                        "⚠️ Migrating 'trades' table: Adding 'id' column and updating Primary Key...")
+                    # 1. Drop existing primary key (symbol)
+                    # Note: Constraint name is usually trades_pkey but good to be sure.
+                    conn.execute(
+                        text("ALTER TABLE trades DROP CONSTRAINT IF EXISTS trades_pkey"))
+                    # 2. Add id column as SERIAL PRIMARY KEY
+                    conn.execute(
+                        text("ALTER TABLE trades ADD COLUMN id SERIAL PRIMARY KEY"))
+                    conn.commit()
+                    print("✅ Migration: 'trades' table updated.")
+
+                # Other column checks (idempotent)
                 conn.execute(
                     text("ALTER TABLE trades ADD COLUMN IF NOT EXISTS dca_count INTEGER DEFAULT 0"))
+                conn.execute(
+                    text("ALTER TABLE trades ADD COLUMN IF NOT EXISTS created_at VARCHAR"))
+                conn.execute(
+                    text("ALTER TABLE trades ADD COLUMN IF NOT EXISTS closed_at VARCHAR"))
+                conn.execute(
+                    text("ALTER TABLE trades ADD COLUMN IF NOT EXISTS pnl FLOAT"))
+                conn.execute(
+                    text("ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_reason VARCHAR"))
                 conn.commit()
         except Exception as e:
             print(f"Migration Warning: {e}")
 
+        Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
     def create_user(self, username, password):
@@ -98,17 +128,27 @@ class PostgresRepository:
                 "best_price": t.best_price,
                 "atr": t.atr,
                 "breakeven_active": t.breakeven_active,
-                "dca_count": t.dca_count
+                "dca_count": t.dca_count,
+                "current_price": t.entry,  # Fallback
+                "unrealized_pnl": 0.0     # Fallback
             }
         session.close()
         return result
 
     def save_trade(self, trade_data):
         session = self.Session()
+        # Look for EXISTING OPEN trade for this symbol to update
+        # If no OPEN trade exists, we create a new row (History preservation)
         trade = session.query(Trade).filter_by(
-            symbol=trade_data['symbol']).first()
+            symbol=trade_data['symbol'], status='OPEN').first()
+
         if not trade:
             trade = Trade(symbol=trade_data['symbol'])
+            # Only set created_at for new trades
+            if 'created_at' in trade_data:
+                trade.created_at = trade_data['created_at']
+            else:
+                trade.created_at = datetime.utcnow().isoformat()
 
         trade.side = trade_data['side']
         trade.entry = float(trade_data['entry'])
@@ -126,13 +166,41 @@ class PostgresRepository:
         session.commit()
         session.close()
 
-    def close_trade(self, symbol):
+    def close_trade(self, symbol, pnl, exit_reason):
         session = self.Session()
         trade = session.query(Trade).filter_by(symbol=symbol).first()
         if trade:
             trade.status = 'CLOSED'
+            trade.pnl = float(pnl)
+            trade.exit_reason = str(exit_reason)
+            trade.closed_at = datetime.utcnow().isoformat()
             session.commit()
-        session.close()  # Keep in history but mark closed
+        session.close()
+
+    def load_closed_trades(self, start_date=None):
+        session = self.Session()
+        query = session.query(Trade).filter_by(status='CLOSED')
+        if start_date:
+            from sqlalchemy import and_
+            # closed_at is ISO string, so lexicographical comparison works for standard ISO8601
+            query = query.filter(Trade.closed_at >= start_date)
+
+        trades = query.all()
+        result = []
+        for t in trades:
+            result.append({
+                "symbol": t.symbol,
+                "side": t.side,
+                "entry": t.entry,
+                "amount": t.amount,
+                "margin": t.margin,
+                "pnl": t.pnl,
+                "exit_reason": t.exit_reason,
+                "created_at": t.created_at,
+                "closed_at": t.closed_at
+            })
+        session.close()
+        return result
 
     def load_state_value(self, key, default=None):
         session = self.Session()
@@ -162,9 +230,13 @@ class PostgresRepository:
         session.commit()
         session.close()
 
-    def load_equity_history(self):
+    def load_equity_history(self, start_date=None):
         session = self.Session()
-        history = session.query(EquityHistory).all()
+        query = session.query(EquityHistory)
+        if start_date:
+            query = query.filter(EquityHistory.timestamp >= start_date)
+
+        history = query.all()
         result = []
         for h in history:
             result.append({

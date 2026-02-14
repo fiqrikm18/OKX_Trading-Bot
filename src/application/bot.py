@@ -1,12 +1,11 @@
 import time
+import threading
 from src.config.settings import RISK_PER_TRADE_PCT, MIN_TRADE_SIZE, LEVERAGE, REAL_TRADING, MAX_POSITIONS, MAX_DAILY_LOSS_PCT
 from src.infrastructure.exchange.client import exchange_client
 from src.infrastructure.persistence.state import TradeManager
 from src.infrastructure.notification.discord import log_to_discord
 from src.domain.analysis.market import fetch_data, get_dynamic_symbols, get_market_regime
 from src.domain.analysis.ai_scanner import get_ai_signal
-
-
 from src.infrastructure.notification.telegram_bot import TelegramService
 
 
@@ -14,6 +13,8 @@ class TradingBot:
     def __init__(self):
         self.manager = TradeManager(exchange_client)
         self.stop_requested = False
+        self.running = False
+        self.thread = None
         self.telegram = TelegramService(self)
         self.telegram.start()
 
@@ -66,7 +67,10 @@ class TradingBot:
                         symbol, amount_coins, limit_price)
 
                 # Wait for fill (Simple blocking for MVP)
-                time.sleep(10)
+                for _ in range(10):
+                    if not self.running:
+                        break
+                    time.sleep(1)
 
                 # Check Order Status
                 fetched = exchange_client.fetch_order(order["id"], symbol)
@@ -129,7 +133,7 @@ class TradingBot:
             margin = (trade["amount"] * trade["entry"]) / LEVERAGE
         roi_pct = (pnl / margin) * 100 if margin > 0 else 0
 
-        self.manager.remove_trade(symbol, pnl)
+        self.manager.remove_trade(symbol, pnl, exit_reason=reason)
 
         new_total_pnl = self.manager.state["total_pnl"]
         new_balance = (
@@ -153,21 +157,50 @@ class TradingBot:
             f"💰 Total PnL: **{total_str}**"
         )
 
-    def run(self):
-        print(f"🤖 **AI TRADER STARTED** (DDD Refactored)")
-        log_to_discord(f"🤖 **Bot Live**")
+    def start(self):
+        if self.running:
+            print("⚠️ Bot is already running!")
+            return
 
-        while True:
+        self.running = True
+        self.stop_requested = False
+        self.thread = threading.Thread(target=self.run_loop, daemon=True)
+        self.thread.start()
+        print(f"🤖 **AI TRADER STARTED** (Background Thread)")
+        log_to_discord(f"🤖 **Bot Live** (API Started)")
+
+    def stop(self):
+        if not self.running:
+            return
+
+        print("🛑 Stop Requested via API...")
+        self.running = False
+        self.stop_requested = True
+        if self.thread:
+            self.thread.join(timeout=5)
+        log_to_discord("🛑 Bot Stopped via API")
+
+    def get_status(self):
+        return {
+            "running": self.running,
+            "balance": self.manager.state.get("paper_balance", 0.0),
+            "open_positions": len(self.manager.state.get("trades", {})),
+            "total_pnl": self.manager.state.get("total_pnl", 0.0)
+        }
+
+    def run_loop(self):
+        print(f"🤖 **AI TRADER LOOP STARTED**")
+        while self.running:
             if self.stop_requested:
-                print("🛑 Stop Requested. Exiting...")
-                log_to_discord("🛑 Bot Stopped via Telegram")
                 break
 
             try:
                 # PHASE 1: MANAGE
                 active_symbols = list(self.manager.state["trades"].keys())
                 total_realized_pnl = self.manager.state["total_pnl"]
-                current_bal = self.get_current_balance()
+
+                # Sync Balance & Log Equity (Always run this)
+                current_bal, current_equity = self.manager.sync_balance()
 
                 print(
                     f"\n--- 💳 Balance: ${current_bal:.2f} | 💰 Profit: ${total_realized_pnl:.4f} ---"
@@ -211,7 +244,7 @@ class TradingBot:
                             else:
                                 pass  # Paper fill at current_price
 
-                             # Update State
+                            # Update State
                             new_total_amt = amount + dca_amount
                             new_margin = trade["margin"] * 2  # Approx
                             # Weighted Avg Entry
@@ -248,6 +281,11 @@ class TradingBot:
 
                     pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
                     roi_str = f"+{roi:.1f}%" if roi >= 0 else f"{roi:.1f}%"
+
+                    # Update State for API
+                    trade["current_price"] = current_price
+                    trade["unrealized_pnl"] = pnl
+                    trade["roi_pct"] = roi
 
                     print(
                         f"Holding {symbol} ({trade['side']}) | PnL: {pnl_str} ({roi_str})"
@@ -303,10 +341,12 @@ class TradingBot:
                     else:
                         print("💤 Balance too low (< $2).")
 
-                time.sleep(10)
+                # Replace time.sleep(10) with interruptible sleep
+                for _ in range(10):
+                    if not self.running:
+                        break
+                    time.sleep(1)
 
-            except KeyboardInterrupt:
-                break
             except Exception as e:
-                print(f"Error: {e}")
-                time.sleep(10)
+                print(f"Error in loop: {e}")
+                time.sleep(5)

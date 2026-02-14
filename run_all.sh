@@ -8,13 +8,15 @@ echo "🚀 Starting OKX Trading Bot & Dashboard..."
 # Trap SIGINT to kill background processes
 trap "kill 0" SIGINT
 
-# Start Dashboard in background
-echo "📊 Starting Dashboard..."
-uv run streamlit run dashboard.py &
+# Start Frontend (React + Vite) in background
+echo "📊 Starting Frontend..."
+cd frontend
+npm run dev &
+cd ..
 
-# Start Bot in background
-echo "🤖 Starting Trading Bot..."
-uv run python main.py &
+# Start Bot via API Server (hosting Bot)
+echo "🤖 Starting API Server..."
+AUTO_START_BOT=true uv run uvicorn src.api:app --host 0.0.0.0 --port 8000 &
 
 # Wait for both
 wait
