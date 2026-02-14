@@ -38,6 +38,7 @@ TRAILING_STOP_PCT = 0.02
 ROE_TARGET = 0.3
 TAKE_PROFIT_PCT = ROE_TARGET / LEVERAGE
 CONFIDENCE_THRESHOLD = 0.65
+ATR_MULTIPLIER = 2.0
 
 REAL_TRADING = False  # CHANGE TO True FOR REAL MONEY
 INITIAL_PAPER_BALANCE = 5.0
@@ -122,9 +123,13 @@ class TradeManager:
         side = trade["side"]
         entry = trade["entry"]
         best = trade.get("best_price", entry)
+        atr = trade.get("atr", 0.0)
 
         if side == "LONG":
             stop_price = best * (1 - TRAILING_STOP_PCT)
+            if atr > 0:
+                stop_price = best - (atr * ATR_MULTIPLIER)
+
             if current_price < stop_price:
                 return "STOP_LOSS", stop_price
             tp_price = entry * (1 + TAKE_PROFIT_PCT)
@@ -132,6 +137,9 @@ class TradeManager:
                 return "TAKE_PROFIT", tp_price
         elif side == "SHORT":
             stop_price = best * (1 + TRAILING_STOP_PCT)
+            if atr > 0:
+                stop_price = best + (atr * ATR_MULTIPLIER)
+
             if current_price > stop_price:
                 return "STOP_LOSS", stop_price
             tp_price = entry * (1 - TAKE_PROFIT_PCT)
@@ -157,7 +165,8 @@ def log_to_discord(message, level="info"):
             DISCORD_WEBHOOK_URL,
             json={
                 "embeds": [
-                    {"description": f"**[{timestamp}]** {message}", "color": color}
+                    {"description": f"**[{timestamp}]** {message}",
+                        "color": color}
                 ]
             },
         )
@@ -180,11 +189,44 @@ def fetch_data(symbol, limit=100):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=limit)
         df = pd.DataFrame(
-            bars, columns=["timestamp", "open", "high", "low", "close", "volume"]
+            bars, columns=["timestamp", "open",
+                           "high", "low", "close", "volume"]
         )
+        # Funding Rate
+        try:
+            funding = exchange.fetch_funding_rate(symbol)
+            funding_rate = float(funding.get('fundingRate', 0.0))
+        except:
+            funding_rate = 0.0
+
+        df['Funding'] = funding_rate
         return df
     except:
         return None
+
+
+def get_market_regime():
+    try:
+        # Fetch daily candles for BTC for 200 EMA
+        btc_bars = exchange.fetch_ohlcv(
+            "BTC/USDT:USDT", timeframe="1d", limit=205)
+        if not btc_bars or len(btc_bars) < 200:
+            return "NEUTRAL"
+
+        df = pd.DataFrame(btc_bars, columns=[
+                          "timestamp", "open", "high", "low", "close", "volume"])
+        df["EMA_200"] = ta.ema(df["close"], length=200)
+
+        last_close = df["close"].iloc[-1]
+        last_ema = df["EMA_200"].iloc[-1]
+
+        if last_close > last_ema:
+            return "BULL"
+        else:
+            return "BEAR"
+    except Exception as e:
+        print(f"Error fetching regime: {e}")
+        return "NEUTRAL"
 
 
 def get_dynamic_symbols(limit=10):
@@ -200,13 +242,15 @@ def get_dynamic_symbols(limit=10):
                         {
                             "symbol": symbol,
                             "change": (
-                                abs(data["percentage"]) if data["percentage"] else 0
+                                abs(data["percentage"]
+                                    ) if data["percentage"] else 0
                             ),
                         }
                     )
         if not valid_pairs:
             return ["BTC/USDT:USDT", "ETH/USDT:USDT"]
-        sorted_pairs = sorted(valid_pairs, key=lambda x: x["change"], reverse=True)
+        sorted_pairs = sorted(
+            valid_pairs, key=lambda x: x["change"], reverse=True)
         return [item["symbol"] for item in sorted_pairs[:limit]]
     except:
         return ["BTC/USDT:USDT"]
@@ -218,26 +262,28 @@ def get_dynamic_symbols(limit=10):
 def get_ai_signal(df):
     df["RSI"] = ta.rsi(df["close"], length=14)
     df["SMA"] = ta.sma(df["close"], length=20)
+    df["ATR"] = ta.atr(df["high"], df["low"], df["close"], length=14)
     df["Returns"] = df["close"].pct_change()
     df["Vol_Change"] = df["volume"].pct_change()
     df["Target"] = (df["close"].shift(-1) > df["close"]).astype(int)
     df.dropna(inplace=True)
     if len(df) < 50:
-        return "NEUTRAL", 0.0
+        return "NEUTRAL", 0.0, 0.0
 
-    features = ["RSI", "SMA", "Returns", "Vol_Change"]
+    features = ["RSI", "SMA", "Returns", "Vol_Change", "Funding"]
     model = RandomForestClassifier(
         n_estimators=100, min_samples_split=10, random_state=42
     )
     model.fit(df[features][:-1], df["Target"][:-1])
     latest = df[features].iloc[[-1]]
+    latest_atr = df["ATR"].iloc[-1]
     prob_up = model.predict_proba(latest)[0][1]
 
     if prob_up > CONFIDENCE_THRESHOLD:
-        return "LONG", prob_up
+        return "LONG", prob_up, latest_atr
     elif prob_up < (1 - CONFIDENCE_THRESHOLD):
-        return "SHORT", (1 - prob_up)
-    return "NEUTRAL", 0.0
+        return "SHORT", (1 - prob_up), latest_atr
+    return "NEUTRAL", 0.0, 0.0
 
 
 def set_leverage(symbol):
@@ -248,7 +294,7 @@ def set_leverage(symbol):
         pass
 
 
-def open_position(symbol, side, available_balance):
+def open_position(symbol, side, available_balance, atr_value):
     target_margin = available_balance * RISK_PER_TRADE_PCT
     if target_margin < MIN_TRADE_SIZE:
         if available_balance > MIN_TRADE_SIZE:
@@ -292,6 +338,7 @@ def open_position(symbol, side, available_balance):
             "amount": amount_coins,
             "margin": target_margin,
             "best_price": price,
+            "atr": atr_value,
         },
     )
 
@@ -393,12 +440,15 @@ def run_bot():
                 )
 
                 if exit_reason:
-                    close_position(symbol, f"{exit_reason} (${exit_price:.4f})")
+                    close_position(
+                        symbol, f"{exit_reason} (${exit_price:.4f})")
 
             # PHASE 2: SCAN
             if len(manager.state["trades"]) < MAX_POSITIONS:
 
-                print(f"🔍 Scanning... (Balance: ${current_bal:.2f})")
+                regime = get_market_regime()
+                print(
+                    f"🔍 Scanning... Regime: {regime} (Balance: ${current_bal:.2f})")
 
                 if current_bal > 2.0:
                     dynamic_list = get_dynamic_symbols(limit=10)
@@ -408,10 +458,20 @@ def run_bot():
                         print(f"Analyzing {symbol}...")
                         df = fetch_data(symbol)
                         if df is not None:
-                            signal, conf = get_ai_signal(df)
+                            signal, conf, atr = get_ai_signal(df)
+
+                            # Regime Filter
+                            if regime == "BULL" and signal == "SHORT":
+                                print(f"⚠️ Signal SHORT ignored (Bull Market)")
+                                continue
+                            if regime == "BEAR" and signal == "LONG":
+                                print(f"⚠️ Signal LONG ignored (Bear Market)")
+                                continue
+
                             if signal != "NEUTRAL":
-                                print(f"✅ SIGNAL: {signal} ({conf:.2f})")
-                                open_position(symbol, signal, current_bal)
+                                print(
+                                    f"✅ SIGNAL: {signal} ({conf:.2f}) | ATR: {atr:.4f}")
+                                open_position(symbol, signal, current_bal, atr)
                                 break
                 else:
                     print("💤 Balance too low (< $2).")
