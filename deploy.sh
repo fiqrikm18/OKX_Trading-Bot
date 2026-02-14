@@ -34,14 +34,16 @@ bun add -g pm2
 echo "🤖 Starting AI Trader & Dashboard..."
 
 # Stop existing if running
-pm2 delete ai-trader 2>/dev/null
-pm2 delete ai-dashboard 2>/dev/null
+# Start Bot (API Server)
+AUTO_START_BOT=true pm2 start "uv run uvicorn src.api:app --host 0.0.0.0 --port 8000" --name "ai-trader"
 
-# Start Bot
-pm2 start main.py --name "ai-trader" --interpreter ./.venv/bin/python3
-
-# Start Dashboard (Streamlit needs specific command structure with PM2)
-pm2 start "uv run streamlit run dashboard.py --server.port 8501 --server.headingsWithAnchors false" --name "ai-dashboard"
+# Build & Serve Frontend
+echo "🏗️ Building Frontend..."
+cd frontend
+npm install
+npm run build
+pm2 serve dist 5173 --name "okx-frontend" --spa
+cd ..
 
 # 7. Save State
 echo "💾 Saving PM2 State..."
@@ -51,7 +53,7 @@ echo "-----------------------------------------------"
 echo "✅ DEPLOYMENT COMPLETE!"
 echo "-----------------------------------------------"
 echo "👉 Check logs:   pm2 logs"
-echo "👉 Dashboard:    http://<your-ip>:8501"
+echo "👉 Dashboard:    http://<your-ip>:5173"
 echo "-----------------------------------------------"
 
 # Startup command (PM2 might ask you to run a command after this)

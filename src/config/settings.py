@@ -23,6 +23,7 @@ MIN_TRADE_SIZE = 2.0
 
 # --- TARGETS ---
 TRAILING_STOP_PCT = 0.02
+TRAILING_ROI_ACTIVATION = 0.10  # Activate trailing stop after 10% ROI
 ROE_TARGET = 0.3
 TAKE_PROFIT_PCT = ROE_TARGET / LEVERAGE
 CONFIDENCE_THRESHOLD = 0.65
@@ -47,3 +48,9 @@ DB_PORT = os.getenv("DB_PORT", "5432")
 # --- TELEGRAM ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# --- API & SECURITY ---
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-keep-it-secret")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 Hours
+AUTO_START_BOT = os.getenv("AUTO_START_BOT", "False").lower() == "true"
