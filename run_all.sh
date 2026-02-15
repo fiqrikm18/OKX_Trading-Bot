@@ -11,7 +11,7 @@ trap "kill 0" SIGINT
 # Start Frontend (React + Vite) in background
 echo "📊 Starting Frontend..."
 cd frontend
-npm run dev &
+bun run dev &
 cd ..
 
 # Start Bot via API Server (hosting Bot)

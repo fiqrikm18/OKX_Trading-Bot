@@ -7,6 +7,11 @@ echo "📦 Updating Linux..."
 sudo apt update -y
 sudo apt install curl unzip -y
 
+# 1.5 Install Node.js (Required for PM2 runtime)
+echo "📦 Installing Node.js..."
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
 # 2. Install uv (Fast Python Installer)
 echo "⚡ Installing uv..."
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -40,8 +45,8 @@ AUTO_START_BOT=true pm2 start "uv run uvicorn src.api:app --host 0.0.0.0 --port 
 # Build & Serve Frontend
 echo "🏗️ Building Frontend..."
 cd frontend
-npm install
-npm run build
+bun install
+bun run build
 pm2 serve dist 5173 --name "okx-frontend" --spa
 cd ..
 

@@ -1,3 +1,4 @@
+from urllib.parse import quote_plus
 from sqlalchemy import create_engine, Column, String, Float, Boolean, Integer, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -50,8 +51,10 @@ class User(Base):
 
 class PostgresRepository:
     def __init__(self):
+        encoded_user = quote_plus(DB_USER)
+        encoded_pass = quote_plus(DB_PASS)
         self.engine = create_engine(
-            f'postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}')
+            f'postgresql://{encoded_user}:{encoded_pass}@{DB_HOST}:{DB_PORT}/{DB_NAME}')
 
         # Schema Migration
         try:
